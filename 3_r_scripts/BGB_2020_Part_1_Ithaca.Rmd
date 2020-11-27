@@ -1,0 +1,905 @@
+---
+title: "Aerial Insectivore Analysis"
+date: "Last Updated: `r format(Sys.time(), '%B %d %Y at %H:%M')`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    theme: cerulean
+    code_folding: hide
+---
+
+# General hypothesis 
+
+* Building on the results of both the 2020 PNAS and 2018 Ecology Letters papers, we want to explore how changes in the nutrient flux from aquatic and terrestrial resources have occurred over time and how this links to reproductive success in a variety of co-occurring aerial insectivores.  
+
+* General Synopsis of 2020 PNAS Paper (https://www.pnas.org/content/117/41/25590)
+    + Springs are warmer over last 100 years
+    + Despite that, the date of the last 'cold snap' (1/2/3 days with high < 18.5 C) has not changed
+    + Birds breed earlier by ~9 days
+    + Because of breeding earlier they are more often exposed to cold snaps while nestlings are at vulnerable age
+    + Year to year, the date of last cold snap relative to breeding is strong predictor of breeding success
+     
+* General Synopsis of 2018 Ecology Letters Paper [link] (https://onlinelibrary.wiley.com/doi/abs/10.1111/ele.13156)
+    + Animals should optimize timing of reproduction to the availability of resources.
+    + Resources vary in the nutritional quality of HUFA, or highly unsaturated fatty acids.
+    + On of the determinants of HUFA content is the due to the base of food webs, where aquatic life stages result in a greater HUFA content than terrestrial ones. [link] (https://besjournals.onlinelibrary.wiley.com/doi/abs/10.1111/1365-2435.13401)
+    + Aquatic insect biomass was a stronger predictor than terrestrial insect biomass in multiple metrics of reproductive success.  
+    + Mismatch may occur not only in terms of overall food availability, but also within the context of species or life stage specific nutritional requirements. 
+    
+* Thus, one of the primary goals of this manuscript is to build upon on the previous aforementioned research and (potentially) answer the following questions - 
+    + Do aquatic and terrestrial insect communities respond differently to climate change? Is there reason to believe one may advance at a quicker rate than the other?
+    + How have aerial insectivore communities local to our insect samples responded to climate change over the same duration, have certain species advanced more quickly than others?
+    + How do these potential shifts in prey communities translate to varying nutritional availability, and has this affected reproductive success of aerial insectivores?
+    
+# General analysis plan
+
+* The three primary datasets that we can use to hopefully answer these questions 
+    + Daily aerial insect abundance data 
+      ++ 
+      
+# Description of datasets
+
+* Daily aerial insect abundance data
+    + 12m tall Rothamsted insect vacuum located in Ithaca, New York, USA (42.50376, -76.46616)
+    + this dataset has coverage from 1989 - 2014, with daily count data of insects typically from April 1st to mid-Summer (varies from late June to mid Oktober)
+    + daily counts of insects from one of 13 different orders are classified into 2 mm size bins
+    + Aquatic orders - *Nematocera* (mosquitoes and midges), *Other Aquatic Diptera* (wastebin for flies), *Ephemoptera* (mayflies), *Tricoptera* (caddisflies), and *Odonata* (dragon- and damselflies)
+    + Terrestrial orders - *Homoptera* (sucking insects, paraphyletic), *Coleoptera* (beetles), *Hemiptera* (true bugs), *Hymenoptera* (bees, wasps, and ants), *Arachnida* (spiders, technically not an insect), *Thysanoptera* (thrips), and *Lepidoptera* (moths and butterflies)
+    + *Other* (for when undergraduates couldn't figure out where the insect belonged) - this group is ignored in the analysis
+    + These classifications aren't absolute, as there are Homopterans with an adult juvenile stage and Dipterans with a terrestrial one, but rather relate to general trends.
+    + There are a total of 613,868 insects in counted, classified, and placed into size bins
+
+* Daily emergence trap data 
+    + typical 1.5 x 1.5m pyramidal emergence trap
+    + only operated for 2 years, 2010 and 2012
+    + capture schedule typically was 3-5 days in a row then a 14 day hiatus between April and July
+    + 4 replicates per day in 2010, 6 replicates per day in 2012
+    + daily counts of insects from one of 13 different orders are classified into 2 mm size bins same as above
+    + 95,749 individual insects insects in counted, classified, and placed into size bins
+    + seems to only be accurate for Nematocera, which isn't exactly surprising
+    
+* Nestwatch data
+    + data obtained from the Cornell Lab of Ornithology's program "Nestwatch" [link] (https://nestwatch.org)
+
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message=FALSE)
+
+require(lubridate)
+require(ggplot2)
+require(cowplot)
+require(zoo)
+require(data.table)
+require(finalfit)
+require(tidyverse)
+require(rsample)
+require(broom)
+require(purrr)
+require(ggridges)
+```
+
+```{r}
+cc <- scales::seq_gradient_pal("deepskyblue1", "firebrick1")(seq(0,1,length.out=26))
+```
+
+```{r}
+setwd("//Users/ryanshipley/Documents/Github/BGB_2020_Part_1_Ithaca/1_raw_data") ##Laptop
+insect_data <- read.csv(file="ithaca_insects_12m_raw_data.csv", head=TRUE, sep=",", stringsAsFactors=FALSE)
+#div_data <- read.csv(file="Diversity_indices_1989_2014.csv", head=TRUE, sep=",", stringsAsFactors=FALSE)
+#size_data <- read.csv(file="Size_Indices_1989_2014.csv", head=TRUE, sep=",", stringsAsFactors=FALSE)
+emer_data <- read.csv(file="emergence_traps.csv", head=TRUE, sep=",", stringsAsFactors=FALSE)
+nest_data <- read.csv(file="nestwatch_raw_data.csv", head = TRUE, sep=",", stringsAsFactors = FALSE)
+```
+
+# Initial Data Processing
+
+```{r}
+insect_data$DATE <- with(insect_data, ymd(sprintf('%04d%02d%02d', YEAR, MONTH, DAY)))
+
+insect_data <- cbind(DOY = yday(insect_data$DATE), insect_data)
+
+#insect_data <- insect_data[, -c(2:5)]
+
+#key flagged sampling dates as NA to not confuse true zeroes
+insect_data <- insect_data %>% 
+  mutate_at( vars( TotalBugs:Irruptive),
+   ~ifelse(insect_data$flag >= 1, NA, .x)
+   )
+
+#the insect sampler was not run during these years
+no_data <- c(1996, 2003)
+```
+
+## Plot of data coverage within each year
+I removed the years 1996 and 2003, as they were "recorded" in the database but lack any insect trap capture information. In more recent years, (2009 forward) the sampling period has been extended to later in the year.  However, we lack corresponding data from earlier years.The vertical slashes are days when insects were captured in the Rothamsted suction trap. In several years (1999, 2004, 2005, 2007, 2010, and 2011) it appears the sampling ends early. This corresponds with ~ day 152 of the year, or June 1st.  
+
+```{r, fig.width= 4, fig.height = 3}
+require(plyr)
+cov_summary <- ddply(insect_data, c("YEAR"), summarise, min=min(DOY), max=max(DOY))
+
+sample_data <- insect_data[ which(insect_data$TotalBugs > 0),]
+  sample_data <- sample_data[ , c("YEAR", "DOY")]
+  
+na_data <- insect_data[ which(is.na(insect_data$TotalBugs)),]
+  na_data <- na_data[ , c("YEAR", "DOY")]
+  na_data <- na_data[which( na_data$YEAR != 1996 & na_data$YEAR != 2003),]
+
+ggplot(data=cov_summary, aes(min, YEAR))+
+  geom_point(data=sample_data, aes(DOY, YEAR), color="cadetblue4", shape="|")+
+  geom_point(data=na_data, aes(DOY, YEAR), color="firebrick3", shape="|")+
+  geom_linerange(data=cov_summary[ which(!cov_summary$YEAR %in% no_data),], aes(xmin=min, xmax=max), color="cadetblue3", alpha=0.5)+
+  geom_linerange(data=cov_summary[ which(cov_summary$YEAR == 1996 | cov_summary$YEAR == 2003),], aes(xmin=min, xmax=max), color="white", size=1)+
+  geom_point(data=cov_summary[ which(!cov_summary$YEAR %in% no_data),], aes(min, YEAR), color="grey50", size=1)+
+  geom_point(data=cov_summary[ which(!cov_summary$YEAR %in% no_data),], aes(max, YEAR), color="grey50", size=1)+
+  ylab("Year")+
+  xlab("Annual Sampling Coverage")+
+  theme_cowplot()+
+  scale_x_continuous(breaks=c(106, 136, 167, 197, 227, 258), labels=c("Apr 15", "May 15", "June 15", "July 15", "August 15", "Sept 15"), limits = c(90, 290))
+```
+
+```{r}
+#time when last regular sampling occurred, where zeros in the data are likely lack of sampling effort, not lack of capture success
+last_dates <- as.data.frame(cbind(YEAR = seq(from=1989, to=2014, by=1), Last_Sample = c(244, 243, 211, 205, 204, 208, 206, 0, 206, 182, 127, 210, 191, 206, 0, 152, 146, 211, 156, 196, 196, 152, 166, 216, 143, 203)))
+```
+
+
+## Three ways to view the data
+Due to this variation in the total data coverage, there are several options to partition the data to look for annual trends, 1) Where we omit years where the coverage ends around day 152 and 2) where we censor all years to day 152, or 3) code all the non-sampling days as NAs, and weight the model accuracy by the number of sampling points that occur later in the year, which is always fewer than earlier in the year. The last option allows us to keep the as much of the original data as possible, even if the coverage is less than ideal. In further downstream models, we can weight the results based on the number of years that have samples. 
+
+```{r, fig.width=8, fig.height= 3}
+###Plot of the short truncated dataset, where we have the most covereage in the most years
+data_1 <- ggplot(data=cov_summary, aes(min, YEAR))+
+            geom_point(data=sample_data[ which(sample_data$DOY <= 152),], aes(DOY, YEAR), color="cadetblue4", shape="|")+
+            geom_point(data=na_data[ which(na_data$DOY <= 152),], aes(DOY, YEAR), color="firebrick3", shape="|")+
+            geom_linerange(data=cov_summary[ which(!cov_summary$YEAR %in% no_data),], aes(xmin=min, xmax=152), color="cadetblue3", alpha=0.5)+
+            geom_linerange(data=cov_summary[ which(!cov_summary$YEAR %in% no_data),], aes(xmin=153, xmax=max), color="firebrick2", alpha=0.5)+
+            geom_linerange(data=cov_summary[ which(cov_summary$YEAR == 1996 | cov_summary$YEAR == 2003),], aes(xmin=min, xmax=max), color="white", size=1)+
+            geom_point(data=cov_summary[ which(!cov_summary$YEAR %in% no_data),], aes(min, YEAR), color="grey50", size=1)+
+            geom_point(data=cov_summary[ which(!cov_summary$YEAR %in% no_data),], aes(152, YEAR), color="grey50", size=1)+
+            ylab("Year")+
+            xlab("Annual Sampling Coverage")+
+            theme_cowplot()+
+            scale_x_continuous(breaks=c(106,  167,  227), labels=c("Apr 15",  "June 15",  "August 15"), limits = c(90, 290))+
+            ggtitle("Early")
+
+###Plot of the long truncated dataset, where we have the longest covereage in the most years
+
+#remove years 1996, 1999, 2003, 2004, 2005, 2007, 2010, and 2011
+bad_years <- c(1996, 1999, 2003, 2004, 2005, 2007, 2010, 2011)
+
+sample_data_sub <- sample_data[ which(!sample_data$YEAR %in% bad_years ),]
+
+data_2 <- ggplot(data=cov_summary, aes(min, YEAR))+
+            geom_point(data=sample_data_sub[ which(sample_data_sub$DOY <= 213),], aes(DOY, YEAR), color="cadetblue4", shape="|")+
+            geom_point(data=na_data[ which(na_data$DOY <= 214 & !na_data$YEAR %in% bad_years),], aes(DOY, YEAR), color="firebrick3", shape="|")+
+            geom_linerange(data=cov_summary[ which(!cov_summary$YEAR %in% bad_years),], aes(xmin=min, xmax=214), color="cadetblue3", alpha=0.5)+
+            geom_linerange(data=cov_summary[ which(!cov_summary$YEAR %in% bad_years),], aes(xmin=214, xmax=max), color="firebrick2", alpha=0.5)+
+            #mark out years we aren't sampling
+            geom_linerange(data=cov_summary[ which(cov_summary$YEAR %in% bad_years),], aes(xmin=min, xmax=max), color="white", size=1)+
+            geom_point(data=cov_summary[ which(!cov_summary$YEAR %in% bad_years),], aes(min, YEAR), color="grey50", size=1)+
+            geom_point(data=cov_summary[ which(!cov_summary$YEAR %in% bad_years),], aes(213, YEAR), color="grey50", size=1)+
+            ylab("Year")+
+            xlab("Annual Sampling Coverage")+
+            theme_cowplot()+
+            scale_x_continuous(breaks=c(106,  167,  227), labels=c("Apr 15",  "June 15",  "August 15"), limits = c(90, 290))+
+            ggtitle("Late")
+
+insect_data <- merge(insect_data, last_dates, by="YEAR")
+
+insect_data$TotalBugs[ (insect_data$DOY > insect_data$Last_Sample) & (insect_data$TotalBugs == 0)] <- NA
+##you can probably drop these columns to keep the dataset smaller
+
+sampling_duration <- ddply(insect_data[ which(insect_data$TotalBugs > 0),], c("YEAR"), summarise, min=91, max=max(DOY))
+
+na_data <- insect_data[ which(is.na(insect_data$TotalBugs)),]
+  na_data <- na_data[ , c("YEAR", "DOY")]
+  na_data <- merge(na_data, sampling_duration, by=c("YEAR"))
+  na_data <- na_data[ which(na_data$DOY <= na_data$max),]
+  
+###Plot of the "maximized" dataset, where we checked for non sample dates versus true zeros. 
+data_3 <- ggplot(cov_summary, aes(min, YEAR))+
+            geom_point(data=sample_data, aes(DOY, YEAR), color="cadetblue4", shape="|")+
+            geom_point(data=na_data, aes(DOY, YEAR), color="firebrick3", shape="|")+
+            geom_linerange(data=sampling_duration,  aes(xmin=min, xmax=max), color="cadetblue3", alpha=0.5)+
+            #mark out years we aren't sampling
+            geom_point(data=sampling_duration, aes(min, YEAR), color="grey50", size=1)+
+            geom_point(data=sampling_duration, aes(max, YEAR), color="grey50", size=1)+
+            ylab("Year")+
+            xlab("Annual Sampling Coverage")+
+            theme_cowplot()+
+            scale_x_continuous(breaks=c(106,  167,  227), labels=c("Apr 15",  "June 15",  "August 15"), limits = c(90, 290))+
+            ggtitle("Compromise")
+
+cowplot::plot_grid(data_1, data_2, data_3, ncol = 3)
+```
+
+```{r}
+insect_data$YEAR <- as.factor(insect_data$YEAR)
+
+#susbset data for tidiness
+totalBugs <- insect_data[, c("YEAR", "DOY", "TotalBugs")]
+
+#Convert to data.table for rolling mean applications
+totalBugs <- as.data.table(totalBugs)
+
+#For some reason some years the date isn't in chronological order
+totalBugs <- totalBugs[ order(YEAR, DOY),]
+
+#totalBugs$TotalBugs[ totalBugs$TotalBugs == 0 & totalBugs$DOY <= 120] <- NA
+
+#Create rolling 3,5, and 7 day means of total insects
+ totalBugs[ , `:=` ('total3' = rollapply(TotalBugs, width=list(1:-1), fill=NA, FUN=median, align="left")) , by=YEAR]
+ totalBugs[ , `:=` ('total7' = rollapply(TotalBugs, width=list(3:-3), fill=NA, FUN=median, align="left")) , by=YEAR]
+ totalBugs[ , `:=` ('total14' = rollapply(TotalBugs, width=list(7:-7), fill=NA, FUN=median, align="left")) , by=YEAR]
+```
+
+
+## Identification and process for dealing with outlier events
+
+Notice there are several abrupt peaks in 1992, 2001, 2004, 2011, 2013, and 2014.  These are driven by single day events where exceptionally large numbers of a single order were captured in the suction trap.  We consider these to be large scale irruptive events, and although they are relevent to insect ecology - they also heavily bias the data towards these single day events.  For example, on days where Nematocerans are captured the median value is 29.02 milligrams with a standard deviation of 144. This extreme skew is due to the inclusion of several days where the measured biomass was 4299, 3557, and 1996 milligrams of Nematocerans.  We addressed this issue by Winsorizing the data that was above the 99 percentile.
+
+```{r, fig.width=10, fig.height=8}
+a1 <- ggplot(totalBugs[ which(totalBugs$YEAR != 1996 & totalBugs$YEAR != 2003),], aes(DOY, (TotalBugs), color=YEAR))+
+        geom_line(alpha=0.25)+
+        scale_colour_manual(values=cc)+
+        theme_cowplot()+
+        facet_wrap(~YEAR, ncol=5)+
+        theme(strip.background = element_rect(fill=NA), legend.position = "none")
+
+a2 <- ggplot(totalBugs[ which(totalBugs$YEAR != 1996 & totalBugs$YEAR != 2003),], aes(DOY, log(TotalBugs), color=YEAR))+
+        geom_line(alpha=0.25)+
+        scale_colour_manual(values=cc)+
+        geom_smooth(se=FALSE, size=0.25)+
+        theme_cowplot()+
+        facet_wrap(~YEAR, ncol=5)+
+        theme(strip.background = element_rect(fill=NA), legend.position = "none")
+
+cowplot::plot_grid(a1, a2, ncol=2)
+```
+
+```{r}
+emer_data$ddate <- as.Date(emer_data$ddate, format = "%m/%d/%Y")
+colnames(emer_data)[1] <- c("DATE")
+
+emer_data$DOY <- yday(emer_data$DATE)
+
+emer_data_dirty <- emer_data %>%
+              filter(qualityissue == 1) %>%
+              mutate(nema_mass = nema_mass / 2,
+                     othdip_mass = othdip_mass / 2,
+                     homo_mass = homo_mass / 2,
+                     coleo_mass = coleo_mass / 2,
+                     hymeno_mass = hymeno_mass / 2,
+                     thysano_mass = thysano_mass / 2,
+                     arach_mass = arach_mass / 2,
+                     ephem_mass = ephem_mass /2,
+                     hemi_mass = hemi_mass / 2,
+                     lepido_mass = lepido_mass / 2,
+                     tricop_mass = tricop_mass /2)
+
+emer_data_clean <- emer_data %>% 
+                  filter(qualityissue == 0)
+
+emer_data_all <- rbind(emer_data_dirty, emer_data_clean)              
+ 
+emer_clean <- merge(emer_data_clean, insect_data[, c(41, 8, c(21:31))], by=c("DATE"))
+   
+```
+
+## Correlation between sampling methods
+The phenological signal between the main vacuum sampler (green) and the 6 individual emergence traps (red) are similar, but the 12m vacuum sampler tends to capture a smaller quantity of insects than emergence traps for aquatic species. 
+
+```{r, fig.height=4, fig.width=10}
+ggplot()+
+  geom_point(data=emer_data[ which(emer_data$year == 2012),], aes(DOY, nema_mass), color="firebrick2", alpha=0.5)+
+  geom_smooth(data=emer_data[ which(emer_data$year == 2012),], aes(DOY, nema_mass), color="firebrick2", se=FALSE)+
+  geom_point(data=insect_data[ which(insect_data$YEAR == 2012 & insect_data$DOY <= 183),], aes(DOY, Nem_Mass), color="cadetblue3", alpha=0.5)+
+  geom_smooth(data=insect_data[ which(insect_data$YEAR == 2012 & insect_data$DOY <= 183),], aes(DOY, Nem_Mass), color="cadetblue3", se=FALSE)+
+  ylab("Nematoceran Biomass")+
+  theme_cowplot()
+```
+
+## Estimation of compositional changes throughout the season. 
+This plot highlights the seasonal change in aquatic versus terrestrial insect biomass flux from 1989-2014. Earlier in the year insect composition tends to be dominated by species with aquatic juvenile life stages whereas when the season progress, terrestrial insect biomass tends to become dominant.
+```{r, fig.height=4, fig.width=10}
+insect_data <- as.data.table(insect_data)
+
+insect_data[ , `:=` ('Aq_last7' = rollapply(Aquatic, width=list(-3:0), fill=NA, FUN=mean, align="left", na.rm=TRUE, partial=TRUE)) , by=YEAR]
+insect_data[ , `:=` ('Te_last7' = rollapply(Terrestrial, width=list(-3:0), fill=NA, FUN=mean, align="left", na.rm=TRUE, partial=TRUE)) , by=YEAR]
+
+insect_data$Aq_ratio <- insect_data$Aq_last7 / (insect_data$Aq_last7 + insect_data$Te_last7)
+insect_data$Te_ratio <- insect_data$Te_last7 / (insect_data$Aq_last7 + insect_data$Te_last7)
+
+ggplot()+
+  geom_point(data=insect_data, aes(DOY, Aq_ratio), color="dodgerblue2", alpha=0.25)+
+   geom_smooth(data=insect_data, aes(DOY, Aq_ratio), color="dodgerblue2")+
+  geom_point(data=insect_data, aes(DOY, Te_ratio), color="firebrick3", alpha=0.25)+
+   geom_smooth(data=insect_data, aes(DOY, Te_ratio), color="firebrick3")+
+  ylab("Percent Biomass")+
+  theme_cowplot()
+```
+
+## Early versus late insect composition plot
+Early (1989 - 1994) is depicted in the blue and more recent data (2008 - 2014) is in red.  There is a shift in early spring, where aquatic insect abundance is a smaller percentage of the total composition of the aerial biomass.  
+
+```{r, fig.height=3, fig.width=10}
+insect_data$YEAR <- as.numeric(as.character((insect_data$YEAR)))
+
+early_end <- 1994
+late_begin <- 2008
+
+ratio_aq_boot_early <- insect_data %>%
+                       filter(YEAR <= early_end & DOY <= 240) %>%
+                        group_by(DOY) %>%
+                         do(data.frame(rbind(Hmisc::smean.cl.boot(.$Aq_ratio, na.rm=TRUE)))) 
+
+ratio_aq_boot_late <- insect_data %>%
+                       filter(YEAR >= late_begin & DOY <= 240) %>%
+                        group_by(DOY) %>%
+                         do(data.frame(rbind(Hmisc::smean.cl.boot(.$Aq_ratio, na.rm=TRUE)))) 
+
+ratio_te_boot_early <- insect_data %>%
+                       filter(YEAR <= early_end & DOY <= 240) %>%
+                        group_by(DOY) %>%
+                         do(data.frame(rbind(Hmisc::smean.cl.boot(.$Te_ratio, na.rm=TRUE)))) 
+
+ratio_te_boot_late <- insect_data %>%
+                       filter(YEAR >= late_begin & DOY <= 240) %>%
+                        group_by(DOY) %>%
+                         do(data.frame(rbind(Hmisc::smean.cl.boot(.$Te_ratio, na.rm=TRUE)))) 
+
+p1 <- ggplot()+
+        geom_point(data=ratio_aq_boot_early, aes(x=DOY, y=Mean),color="cadetblue3")+
+              geom_linerange(data=ratio_aq_boot_early, aes(x=DOY, ymin=Lower, ymax=Upper), color="cadetblue3", alpha=0.5)+
+              geom_smooth(data=ratio_aq_boot_early, aes(x=DOY, y=Mean), se=FALSE, color="cadetblue3")+
+        geom_point(data=ratio_aq_boot_late, aes(x=DOY, y=Mean),color="firebrick3")+
+              geom_linerange(data=ratio_aq_boot_late, aes(x=DOY, ymin=Lower, ymax=Upper), color="firebrick3", alpha=0.5)+
+              geom_smooth(data=ratio_aq_boot_late, aes(x=DOY, y=Mean), se=FALSE, color="firebrick3")+
+        scale_x_continuous(breaks=c(106,  167,  227), labels=c("Apr 15",  "June 15",  "August 15"), limits = c(90, 240))+
+        scale_y_continuous(labels = function(x) paste0(x*100, "%")) +
+        ylab("Percent Biomass")+
+        ggtitle("Aquatic Insect Biomass")+
+        theme_cowplot()
+
+p2 <- ggplot()+
+        geom_point(data=ratio_te_boot_early, aes(x=DOY, y=Mean),color="cadetblue3")+
+              geom_linerange(data=ratio_te_boot_early, aes(x=DOY, ymin=Lower, ymax=Upper), color="cadetblue3", alpha=0.5)+
+              geom_smooth(data=ratio_te_boot_early, aes(x=DOY, y=Mean), se=FALSE, color="cadetblue3")+
+        geom_point(data=ratio_te_boot_late, aes(x=DOY, y=Mean),color="firebrick3")+
+              geom_linerange(data=ratio_te_boot_late, aes(x=DOY, ymin=Lower, ymax=Upper), color="firebrick3", alpha=0.5)+
+              geom_smooth(data=ratio_te_boot_late, aes(x=DOY, y=Mean), se=FALSE, color="firebrick3")+
+        scale_x_continuous(breaks=c(106,  167,  227), labels=c("Apr 15",  "June 15",  "August 15"), limits = c(90, 240))+
+        scale_y_continuous(labels = function(x) paste0(x*100, "%")) +
+        ylab("Percent Biomass")+
+        ggtitle("Terrestrial Insect Biomass")+
+        theme_cowplot()
+
+cowplot::plot_grid(p1, p2, ncol=2)
+```
+
+```{r}
+max_day <- 240
+```
+
+```{r, warning=FALSE, fig.width=10, fig.height=4}
+by_group_stats <- insect_data[, c("ddate", "ddate.1", "MONTH", "DAY", "YEAR", "Week", "DOY",  "Aquatic", "Terrestrial")]
+
+colnames(by_group_stats) <- c("jdate", "ddate", "Month", "Day", "Year", "Week", "DOY", "Aquatic", "Terrestrial")
+
+by_group_stats <- reshape2::melt(by_group_stats, id=c("jdate", "ddate", "Month", "Day", "Year", "Week", "DOY"))
+
+by_group_stats$Year <- as.numeric(as.character(by_group_stats$Year))
+
+#winsorize extreme outliers, replace those trimmed values with interpolated values
+by_group_stats_wsr <- by_group_stats %>% 
+                            group_by(variable) %>%
+                              mutate(value = replace(value, value > quantile(by_group_stats$value, 0.95, na.rm=T), NA)) %>%
+                            ungroup() %>%
+                              group_by(Year, variable) %>%
+                                  mutate(interpolated = value) %>%
+                                  mutate(interpolated = replace(interpolated, Week > 10 & interpolated == 0, NA)) %>%
+                            ungroup() %>%
+                                  mutate(interpolated = na.approx(interpolated, maxgap=3, rule=2))
+
+
+by_group_stats_wsr <- as.data.table(by_group_stats_wsr)
+
+by_group_stats_wsr[ , `:=` ('int_roll' = rollapply(interpolated, width=list(-3:3), fill=NA, FUN=mean, align="left")) , by=c("Year", "variable")]
+```
+
+```{r, fig.height=4, fig.width=10}
+by_group_early <- by_group_stats_wsr %>%
+                    filter(Year <= early_end) %>%
+                      group_by(variable, DOY) %>%
+                        do(data.frame(rbind(Hmisc::smean.cl.boot(.$int_roll))))
+                      
+by_group_late <- by_group_stats_wsr %>%
+                    filter(Year >= late_begin) %>%
+                      group_by(variable, DOY) %>%
+                        do(data.frame(rbind(Hmisc::smean.cl.boot(.$int_roll))))
+
+b1 <- ggplot()+
+        geom_point(data=by_group_early, aes(x=DOY, y=Mean),color="cadetblue3")+
+        geom_linerange(data=by_group_early, aes(x=DOY, ymin=Lower, ymax=Upper), color="cadetblue3", alpha=0.5)+
+        geom_line(data=by_group_early, aes(x=DOY, y=Mean),color="cadetblue3")+
+        #stat_smooth(data=by_group_early, aes(x=DOY, y=Mean), se=FALSE, color="cadetblue3", method="glm", family="quasipoisson", formula = y ~ ns(x, 3))+
+        geom_point(data=by_group_late, aes(x=DOY, y=Mean), color="firebrick3")+
+        geom_linerange(data=by_group_late, aes(x=DOY, ymin=Lower, ymax=Upper), color="firebrick3", alpha=0.2)+
+        geom_line(data=by_group_late, aes(x=DOY, y=Mean), color="firebrick3")+
+        #stat_smooth(data=by_group_late, aes(x=DOY, y=Mean), se=FALSE, color="firebrick3", method="glm", family="quasipoisson", formula = y ~ ns(x, 3))+
+        facet_wrap(.~variable, ncol=2)+
+        theme_cowplot()+
+        ylab("Dry insect mass (mg/d)")+
+        theme(strip.background = element_rect(fill=NA),plot.title = element_text(hjust = 0.5))+
+        scale_x_continuous(breaks=c(106, 136, 167, 197), labels=c("Apr 15", "May 15", "June 15", "July 15"), limits=c(99,200))+
+        xlab(NULL)+
+        ggtitle("Insect biomass 1989-1995 compared to 2008-2014")
+
+
+# b2 <- ggplot()+
+#         geom_ridgeline_gradient(data=subMeans, aes(x=DOY, y=0, height=up, fill=roll), color=NA, min_height=-4)+
+#         geom_ridgeline_gradient(data=subMeans, aes(x=DOY, y=0, height=down, fill=roll), color=NA, min_height=-4)+
+#         scale_fill_gradient2(low="deepskyblue3", mid="white", high="firebrick3", midpoint=0)+
+#         geom_hline(yintercept=meanChange, size=lSize2, linetype="dotted", color="black")+
+#         geom_hline(yintercept=0)+
+#         geom_line(data=subMeans, aes(DOY, roll), size=1, color="white")+
+#         geom_line(data=subMeans, aes(DOY, roll), size=lSize, color="black")+
+#         scale_x_continuous(breaks=c(106, 136, 167, 197), labels=c("Apr 15", "May 15", "June 15", "July 15"), limits=c(99,200))+
+#         theme_cowplot()+
+#         theme(legend.position = "none")+
+#         ylab("Change °C")+
+#         xlab(NULL)
+# 
+# bottom_row <- plot_grid(b2, b2, ncol=2, label_size = 12)
+# 
+# top_row <- plot_grid(b1, ncol = 1, label_size=12)
+# 
+# # then combine with the top row for final plot
+# plot_grid(top_row, bottom_row, label_size = 12, ncol = 1,  align="tlbr", rel_heights=c(2,1))
+
+b1
+```
+
+## Net changes in insect biomass from 1989-1994 compared to 2008-2014
+
+```{r, fig.width=8, fig.height=2}
+by_group_comb <- merge(by_group_early, by_group_late, by=c("variable", "DOY"))
+
+colnames(by_group_comb) <- c("variable", "DOY", "mean_old", "lower_old", "upper_old", "mean_new", "lower_new", "upper_new")
+
+by_group_comb$net_diff <- by_group_comb$mean_new - by_group_comb$mean_old
+
+#this is for coding the positive or negative components of the plot red or blue (or whatever color)
+by_group_comb$up <- by_group_comb$net_diff
+by_group_comb$up[ by_group_comb$net_diff <= 0 ] <- 0
+
+by_group_comb$down <- by_group_comb$net_diff
+by_group_comb$down[ by_group_comb$net_diff >= 0 ] <- 0
+
+ggplot()+
+  geom_ridgeline_gradient(data=by_group_comb, aes(x=DOY, y=0, height=up, fill=net_diff), color=NA)+
+  geom_ridgeline_gradient(data=by_group_comb, aes(x=DOY, y=0, height=down, fill=net_diff), color=NA, min_height=-100)+
+    scale_fill_gradient2(low="deepskyblue3", mid="white", high="firebrick3", midpoint=0)+
+  theme_cowplot()+
+  theme(strip.background = element_rect(fill=NA),plot.title = element_text(hjust = 0.5))+
+  scale_x_continuous(breaks=c(106, 136, 167, 197), labels=c("Apr 15", "May 15", "June 15", "July 15"), limits=c(99,200))+
+  ylab("Net Change Dry Biomass (mg/d)")+
+  xlab(NULL)+
+  facet_wrap(.~variable, ncol=2)+
+  geom_hline(yintercept=0)+
+  ggtitle("Changes in Insect Biomass Flux from 1989-1995 to 2008-2014")
+
+```
+
+
+## For estimation of annual count data, we have to ensure the data has the same temporal coverage amongst years.  
+
+```{r, fig.width=10, fig.height=4}
+by_order_counts <- insect_data[, c(3:6, 1, 7, 2, 9:20)]
+
+colnames(by_order_counts) <- c("jdate", "ddate", "Month", "Day", "Year", "Week", "DOY", "Nematocera", "Other Diptera", "Homoptera", "Coleoptera", "Hymenoptera", "Thysanoptera", "Arachnida", "Ephemoptera", "Hemiptera", "Lepidoptera", "Tricoptera", "Odonata")
+
+by_order_counts <- reshape2::melt(by_order_counts, id=c("jdate", "ddate", "Month", "Day", "Year", "Week", "DOY"))
+
+#truncate outliers to a maximum of 3 standard deviations above the mean
+by_order_counts_stats <- plyr::ddply(by_order_counts[which(by_order_counts$value > 0 ),], c("variable"), summarise, max=max(value), mean=mean(value), sd=sd(value), sigma=(sd(value)*3)+mean(value))
+
+a1 <- ggplot(data=by_order_counts[ which(by_order_counts$value > 0),], aes(value))+
+          geom_histogram()+
+          facet_wrap(~ variable, ncol=3, scales="free")+
+          theme_cowplot()+
+          ylab("Total Counts")+
+          theme(strip.background = element_rect(fill=NA), strip.text.x = element_text(size = 9), axis.text = element_text(size=8))+
+          xlab("Raw Values")
+
+#Winsorize the data at a 99 percentile, truncating all data above that value.
+by_order_counts_wsr <- by_order_counts %>% 
+                            group_by(variable) %>%
+                            mutate(value = replace(value, value > quantile(by_order_counts$value, 0.99, na.rm=T), NA))
+
+a2 <- ggplot(data=by_order_counts_wsr[which(by_order_counts_wsr$value > 0 ),], aes(value))+
+          geom_histogram()+
+          facet_wrap(~ variable, ncol=3, scales="free")+
+          theme_cowplot()+
+          ylab("Total Counts")+
+          theme(strip.background = element_rect(fill=NA), strip.text.x = element_text(size = 9), axis.text = element_text(size=8))+
+          xlab("Winsorized Values")
+
+cowplot::plot_grid(a1, a2, ncol=2)
+```
+
+```{r}
+#replace max values with interpolated values
+by_order_counts_wsr$interpolated <-  na.approx(by_order_counts_wsr$value, maxgap = 3, na.rm=FALSE)
+
+#locate different sized gaps of zeroes and interpolate across them
+by_order_counts_wsr$interpolated <- replace(by_order_counts_wsr$interpolated, by_order_counts_wsr$interpolated == 0, NA)
+by_order_counts_wsr$interpolated <-  na.approx(by_order_counts_wsr$interpolated, maxgap = 3, na.rm=FALSE)
+by_order_counts_wsr$interpolated <- replace(by_order_counts_wsr$interpolated, is.na(by_order_counts_wsr$interpolated), 0)
+```
+
+
+###Summarise data by annual counts 
+```{r, fig.width=10, fig.height=4}
+max_day < - 150
+#by_order_counts_wsr_trim <- by_order_counts_wsr[ which(by_order_counts_wsr$DOY < max_day),]
+
+by_order_counts_wsr_trim <- by_order_counts_wsr
+
+by_order_count_summary <- by_order_counts_wsr_trim %>%
+                            group_by(Year, variable) %>%
+                            dplyr::summarise(int_sum = sum(interpolated, na.rm=TRUE), raw_sum = sum(value, na.rm = TRUE))
+  
+by_order_count_summary$Year <- as.numeric(as.character(by_order_count_summary$Year))
+
+ggplot(data=by_order_count_summary, aes(x=Year, y=int_sum))+
+  geom_point(size=0.5)+
+  geom_point(data=by_order_count_summary[ which(by_order_count_summary$int_sum <= 7),], aes(x=Year, y=int_sum), color="red")+
+  geom_smooth(color="black", method="loess", level=0.95)+
+  facet_wrap(~ variable, ncol=3, scales="free")+
+  theme_cowplot()+
+  ylab("Annual total counts")+
+  theme(strip.background = element_rect(fill=NA))+
+  scale_x_continuous(breaks=(c(1990, 2000, 2010)))
+```
+
+```{r}
+by_order_mass <- insect_data[, c(3:6, 1, 7, 2, 21:32)]
+
+colnames(by_order_mass) <- c("jdate", "ddate", "Month", "Day", "Year", "Week", "DOY", "Nematocera", "Other Diptera", "Homoptera", "Coleoptera", "Hymenoptera", "Thysanoptera", "Arachnida", "Ephemoptera", "Hemiptera", "Lepidoptera", "Tricoptera", "Odonata")
+
+by_order_mass <- reshape2::melt(by_order_mass, id=c("jdate", "ddate", "Month", "Day", "Year", "Week", "DOY"))
+
+ggplot(data=by_order_mass[ which(by_order_mass$value > 0),], aes(value))+
+  geom_histogram()+
+  facet_wrap(~ variable, ncol=4, scales="free")+
+  theme_cowplot()+
+  ylab("Total Counts")+
+  theme(strip.background = element_rect(fill=NA))+
+  xlab("Raw Values")
+                            
+by_order_mass_wsr <-  by_order_mass %>% 
+                            group_by(variable) %>%
+                              mutate(value = replace(value, value > quantile(by_group_stats$value, 0.95, na.rm=T), NA)) %>%
+                            ungroup() %>%
+                              group_by(Year, variable) %>%
+                                  mutate(interpolated = value) %>%
+                                  mutate(interpolated = replace(interpolated, Week > 10 & interpolated == 0, NA)) %>%
+                            ungroup() %>%
+                                  mutate(interpolated = na.approx(interpolated, maxgap=7, rule=2))
+
+#by_order_counts_wsr <- by_order_counts %>% 
+#                            group_by(variable) %>%
+#                            filter(value < quantile(by_order_counts$value, 0.99))
+
+ggplot(data=by_order_mass_wsr[which(by_order_mass_wsr$value > 0 ),], aes(value))+
+  geom_histogram()+
+  facet_wrap(~ variable, ncol=4, scales="free")+
+  theme_cowplot()+
+  ylab("Total Counts")+
+  theme(strip.background = element_rect(fill=NA))+
+  xlab("Winsorized Values")
+```
+
+```{r}
+#replace max values with interpolated values
+by_order_mass_wsr$interpolated <-  na.approx(by_order_mass_wsr$value, maxgap = 3, na.rm=FALSE)
+
+#locate different sized gaps of zeroes and interpolated across them
+by_order_mass_wsr$interpolated <- replace(by_order_mass_wsr$interpolated, by_order_mass_wsr$interpolated == 0, NA)
+by_order_mass_wsr$interpolated <-  na.approx(by_order_mass_wsr$interpolated, maxgap = 3, na.rm=FALSE)
+by_order_mass_wsr$interpolated <- replace(by_order_mass_wsr$interpolated, is.na(by_order_mass_wsr$interpolated), 0)
+```
+
+
+```{r, fig.width=6, fig.height=4}
+max_day <- 150
+#remove years 1996, 1999, 2003, 2004, 2005, 2007, 2010, and 2011
+bad_years <- c(1996, 1999, 2003, 2004, 2005, 2007, 2010, 2011)
+
+by_order_mass_wsr_trim <- by_order_mass_wsr[ which(by_order_mass_wsr$DOY < max_day),]
+#by_order_mass_wsr_trim  <- by_order_mass_wsr_trim [ which(by_order_mass_wsr_trim$)]
+
+by_order_mass_summary <- by_order_mass_wsr_trim %>%
+                      group_by(Year, variable) %>%
+                      dplyr::summarise(sum = sum(interpolated))
+  
+by_order_mass_summary$Year <- as.numeric(as.character(by_order_mass_summary$Year))
+
+ggplot(data=by_order_mass_summary, aes(x=Year, y=sum))+
+  geom_point()+
+  geom_point(data=by_order_mass_summary[ which(by_order_mass_summary$sum <= 1),], aes(x=Year, y=sum), color="red")+
+  geom_smooth(color="black")+
+  facet_wrap(~ variable, ncol=3, scales="free")+
+  theme_cowplot()+
+  ylab("Total dry biomass per year (mg)")+
+  theme(strip.background = element_rect(fill=NA))+
+  scale_x_continuous(breaks=(c(1990, 2000, 2010)))
+```
+
+```{r}
+by_order_mass_wsr <- by_order_mass_wsr[ which(by_order_mass_wsr$DOY < 250),]
+
+by_order_mass_wsr <- as.data.table(by_order_mass_wsr)
+
+by_order_mass_wsr[ , `:=` ('int_5_roll' = rollapply(interpolated, width=list(3:-3), fill=NA, FUN=median, align="left")) , by=c("Year", "variable")]
+
+biomass_summary <- plyr::ddply(by_order_mass_wsr[which(by_order_mass_wsr$value > 0),], c("variable", "DOY"), summarise, mean=median(value), sd=sd(interpolated), max=max(interpolated), min=min(interpolated))
+
+biomass_boot <- by_order_mass_wsr %>%
+                  group_by(variable, DOY) %>%
+                  do(data.frame(rbind(Hmisc::smean.cl.boot(.$int_5_roll))))
+```
+
+```{r, fig.width=6, fig.height=4}
+biomass_boot <- biomass_boot[which(biomass_boot$variable == "Nematocera" | biomass_boot$variable == "Other Diptera" | biomass_boot$variable == "Hymenoptera" | biomass_boot$variable == "Coleoptera" | biomass_boot$variable == "Thysanoptera" | biomass_boot$variable == "Hemiptera"),]
+
+ggplot()+
+  geom_linerange(data=biomass_boot, aes(x=DOY, ymin=Lower, ymax=Upper), size=0.75, alpha=0.25)+
+  #geom_point(data=biomass_boot[which(biomass_boot$variable == "Nematocera"| biomass_boot$variable == "Other Diptera"),], aes(DOY, Mean))+
+  geom_line(data=biomass_boot, aes(DOY, Mean))+
+  #geom_line(data=rib_data, aes(x=x, y=y))+
+  theme_cowplot()+
+  ylab("Insect dry mass (mg/d)")+
+  xlab(NULL)+
+  facet_wrap(~ variable, ncol=2, scales="free")+
+  theme(strip.background = element_rect(fill=NA))+
+  scale_x_continuous(breaks=c(106, 136, 167, 197), labels=c("Apr 15", "May 15", "June 15", "July 15"), limits=c(99,200))
+  
+```
+
+```{r}
+by_order_mass_wsr$Year <- as.numeric(as.character(by_order_mass_wsr$Year))
+
+by_order_mass_early <- by_order_mass_wsr[ which(by_order_mass_wsr$DOY < 250 & by_order_mass_wsr$Year >= 2009),]
+
+by_order_mass_early <- as.data.table(by_order_mass_early)
+
+by_order_mass_early[ , `:=` ('int_5_roll' = rollapply(interpolated, width=list(3:-3), fill=NA, FUN=median, align="left")) , by=c("Year", "variable")]
+
+biomass_summary <- plyr::ddply(by_order_mass_early[which(by_order_mass_early$value > 0),], c("variable", "DOY"), summarise, mean=median(value), sd=sd(interpolated), max=max(interpolated), min=min(interpolated))
+
+biomass_boot <- by_order_mass_early %>%
+                  group_by(variable, DOY) %>%
+                  do(data.frame(rbind(Hmisc::smean.cl.boot(.$int_5_roll))))
+```
+
+```{r, fig.width=6, fig.height=4}
+biomass_boot <- biomass_boot[which(biomass_boot$variable == "Nematocera" | biomass_boot$variable == "Other Diptera" | biomass_boot$variable == "Hymenoptera" | biomass_boot$variable == "Coleoptera" | biomass_boot$variable == "Thysanoptera" | biomass_boot$variable == "Hemiptera"),]
+
+ggplot()+
+  geom_linerange(data=biomass_boot, aes(x=DOY, ymin=Lower, ymax=Upper), size=0.75, alpha=0.25)+
+  #geom_point(data=biomass_boot[which(biomass_boot$variable == "Nematocera"| biomass_boot$variable == "Other Diptera"),], aes(DOY, Mean))+
+  geom_line(data=biomass_boot, aes(DOY, Mean))+
+  #geom_line(data=rib_data, aes(x=x, y=y))+
+  theme_cowplot()+
+  ylab("Insect dry mass (mg/d)")+
+  xlab(NULL)+
+  facet_wrap(~ variable, ncol=2, scales="free")+
+  theme(strip.background = element_rect(fill=NA))+
+  scale_x_continuous(breaks=c(106, 136, 167, 197), labels=c("Apr 15", "May 15", "June 15", "July 15"), limits=c(99,200))
+  
+```
+
+# Processing of Nestwatch Data
+
+```{r}
+setwd("//Users/ryanshipley/Documents/Github/BGB_2020_Part_1_Ithaca/1_raw_data") ##Laptop
+
+nest_data <- read.csv(file="nestwatch_raw_data.csv", head = TRUE, sep=",", stringsAsFactors = FALSE)
+puma_data <- read.csv(file="martinwatch_raw_data.csv", head = TRUE, sep=",", stringsAsFactors = FALSE)
+
+#packages needed for some basic geoprocessing
+require(geosphere)
+```
+
+```{r}
+#fix nest_data's very obscure and somewhat idiotic date format
+
+nest_data$Year <- as.numeric(nest_data$Year)
+
+nest_data$FIRST_LAY_DT <- as.Date(nest_data$FIRST_LAY_DT, format = "%m/%d/%Y")
+nest_data$HATCH_DT <- as.Date(nest_data$HATCH_DT, format = "%m/%d/%Y")
+nest_data$FLEDGE_DT <- as.Date(nest_data$FLEDGE_DT, format = "%m/%d/%Y")
+
+nest_data$FIRST_DOY <- yday(nest_data$FIRST_LAY_DT)
+nest_data$HATCH_DOY <- yday(nest_data$HATCH_DT)
+nest_data$FLEDGE_DOY <- yday(nest_data$FLEDGE_DT)
+```
+
+
+## Filter data within specific distances of the Ithaca Long Term Study Site in Ithaca, New York
+
+```{r}
+#location of insect sampler and the Tree Swallow Long Term Study Site in Ithaca, New York, USA (42.50376, -76.46616)
+
+#let's select a reasonable radius from the insect sampler
+filtDist <- 150
+
+#First gather unique coordinates from the nestwatch dataset
+nestwatch_coords <- unique(nest_data[c("LONGITUDE", "LATITUDE")])
+#nestwatch_coords$id <- seq(from=1, to=nrow(nestwatch_coords), by=1)
+
+ithaca_coords <- as.data.frame(t(c(LONGITUDE = -76.46616, LATITUDE = 42.50376)))
+
+nestwatch_dist <- distm(nestwatch_coords, ithaca_coords, fun=distGeo) / 1000 #divide by thousand for results in kilometers
+
+nestwatch_dist <- as.data.frame(cbind(nestwatch_coords, distance = nestwatch_dist))
+
+nestwatch_dist <- nestwatch_dist %>%
+                    filter(distance < filtDist)
+
+nest_data <- merge(nest_data, nestwatch_dist, by=c("LATITUDE", "LONGITUDE"))
+
+target_species <- c("barswa", "barswa5", "easpho", "purmar", "treswa", "houwre")
+
+nest_data <- nest_data %>%
+              filter(SPECIES_CODE %in% target_species)
+```
+
+```{r}
+#do the same for the Purple Martin database
+puma_coords <- unique(puma_data[c("longitude", "latitude")])
+
+colnames(puma_coords) <- c("LONGITUDE", "LATITUDE")
+
+puma_dist <- distm(puma_coords, ithaca_coords, fun=distGeo) / 1000 #divide by thousand for results in kilometers
+
+puma_dist <- as.data.frame(cbind(puma_coords, distance = puma_dist))
+
+puma_dist <- puma_dist %>%
+                    filter(distance < filtDist)
+
+colnames(puma_dist) <- c("longitude", "latitude", "distance") 
+
+puma_data <- merge(puma_data, puma_dist, by=c("latitude", "longitude"))
+```
+
+
+## Sample sites from Nestwatch and Purple Martin Conservation Association Datasets
+Plot of the sampled points within 150 km of the Ithaca Long Term Study Site in Ithaca, New York
+
+```{r}
+require(usmap)
+require(spData)
+
+    ggplot()+
+        geom_sf(data=us_states)+
+        geom_point(data=nest_data, aes(LONGITUDE, LATITUDE), size=0.25)+
+        geom_point(data=puma_data, aes(longitude, latitude), size=1, color="purple")+
+        geom_point(data=ithaca_coords, aes(LONGITUDE, LATITUDE), size=3, shape=21, fill="firebrick3")+
+        coord_sf(xlim=c(-79, -73), ylim=c(41,44), expand=FALSE)+
+        scale_x_continuous( breaks = c(-78, -76, -74), labels = c("78°W", "76°W", "74°W"))+
+        theme_cowplot()
+
+```
+
+```{r}
+#convert species code to factor
+nest_data$SPECIES_CODE <- as.factor(nest_data$SPECIES_CODE)
+
+puma_data$DOY <- yday(as.Date(puma_data$First_egg, format="%m/%d/%Y"))
+
+#ggplot()+
+#  geom_bar(data=nest_data, aes(SPECIES_CODE))+
+#  theme_cowplot()+
+#  theme(axis.text.x = element_text(angle = 90, hjust=1))
+```
+
+```{r}
+require(ggridges)
+puma_data <- puma_data[ which(puma_data$Year != 1995),]
+
+puma_median <- ddply( puma_data, c("Year"), summarise, median=median(DOY, na.rm=TRUE), mean=mean(DOY, na.rm=TRUE))
+
+overall_median <- mean(puma_data$DOY, na.rm=TRUE)
+
+puma_trend <- data.frame(trend = predict(lm(DOY ~ Year, data=puma_data), newdata = data.frame(Year = seq(from=min(puma_data$Year), to=max(puma_data$Year), by=1))))
+  puma_median<- cbind(puma_median, trend = puma_trend)
+
+ggplot()+
+  geom_density_ridges(data=puma_data, aes(x=DOY, y=Year, group=Year), color=NA, scale=0.5, fill="firebrick3", alpha=0.5)+
+  geom_point(data=puma_median, aes(x=median, y=Year))+
+  geom_smooth(data=puma_median, aes(x=trend, y=Year), method="lm", se=FALSE, color="black", size=0.5)+
+  #geom_point(data=puma_median, aes(x=mean, y=as.factor(Year)), shape=21)+
+  theme_cowplot()+
+  geom_vline(xintercept=overall_median, linetype="dotted", color="grey50")+
+  coord_flip()+
+  theme(axis.text.x = element_text(angle = 90))+
+  ylab("Year")+
+  xlim(120,180)+
+  ggtitle("Purple Martin (Progne subis)")
+  
+```
+
+```{r}
+tres_data <- nest_data %>%
+              filter(SPECIES_CODE == c("treswa")) %>%
+              filter(FIRST_DOY <= 160) %>%
+              filter(Year < 2018 & Year >= 1996)
+
+tres_data <- tres_data[ !is.na(tres_data$FIRST_LAY_DT),]
+
+tres_median <- ddply( tres_data, c("Year"), summarise, median=median(FIRST_DOY, na.rm=TRUE), mean=mean(FIRST_DOY, na.rm=TRUE))
+
+overall_median <- mean(tres_data$FIRST_DOY, na.rm=TRUE)
+
+tres_trend <- data.frame(trend = predict(lm(FIRST_DOY ~ Year, data=tres_data), newdata = data.frame(Year = seq(from=1996, to=2017, by=1))))
+  tres_median<- cbind(tres_median, trend = tres_trend)
+
+ggplot()+
+  geom_density_ridges(data=tres_data, aes(x=FIRST_DOY, y=Year, group=Year), color=NA, scale=0.5, fill="firebrick3", alpha=0.5)+
+  geom_point(data=tres_median, aes(x=median, y=Year))+
+  geom_smooth(data=tres_median, aes(x=trend, y=Year), method="lm", se=FALSE, color="black", size=0.5)+
+  #geom_point(data=puma_median, aes(x=mean, y=as.factor(Year)), shape=21)+
+  theme_cowplot()+
+  geom_vline(xintercept=overall_median, linetype="dotted", color="grey50")+
+  coord_flip()+
+  theme(axis.text.x = element_text(angle = 90))+
+  ylab("Year")+
+  xlim(120, 180)+
+  ggtitle("Tree Swallow (Tachycineta bicolor)")
+```
+
+```{r}
+hou_data <- nest_data %>%
+              filter(SPECIES_CODE == c("houwre")) %>%
+              filter(FIRST_DOY <= 160) %>%
+              filter(Year < 2018 & Year >= 1996)
+
+hou_data <- hou_data[ !is.na(hou_data$FIRST_LAY_DT),]
+
+hou_median <- ddply( hou_data, c("Year"), summarise, median=median(FIRST_DOY, na.rm=TRUE), mean=mean(FIRST_DOY, na.rm=TRUE))
+
+overall_median <- mean(hou_data$FIRST_DOY, na.rm=TRUE)
+
+hou_trend <- data.frame(trend = predict(lm(FIRST_DOY ~ Year, data=hou_data), newdata = data.frame(Year = seq(from=1997, to=2017, by=1))))
+  hou_median<- cbind(hou_median, trend = hou_trend)
+
+ggplot()+
+  geom_density_ridges(data=hou_data, aes(x=FIRST_DOY, y=Year, group=Year), color=NA, scale=0.5, fill="firebrick3", alpha=0.5)+
+  geom_point(data=hou_median, aes(x=median, y=Year))+
+  geom_smooth(data=hou_median, aes(x=trend, y=Year), method="lm", se=FALSE, color="black", size=0.5)+
+  #geom_point(data=puma_median, aes(x=mean, y=as.factor(Year)), shape=21)+
+  theme_cowplot()+
+  geom_vline(xintercept=overall_median, linetype="dotted", color="grey50")+
+  coord_flip()+
+  theme(axis.text.x = element_text(angle = 90))+
+  ylab("Year")+
+  xlim(120, 180)+
+  ggtitle("House Wren (Troglodytes aedon)")
+```
+
+```{r}
+covary <- as.data.frame(cbind(puma = puma_median$mean, tres = tres_median$mean))
+
+ggplot(data=covary, aes(tres, puma))+
+  geom_point()+
+  geom_smooth(method = "lm")+
+  theme_cowplot()
+
+cor(covary$tres, covary$puma)
+```
+
+
